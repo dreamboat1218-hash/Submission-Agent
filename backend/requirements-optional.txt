@@ -1,0 +1,7 @@
+# 可选增强组件：向量检索 / 压缩包格式 / OCR
+chromadb>=0.5.0
+py7zr>=0.20.0
+rarfile>=4.0
+unrar-cffi>=0.2.2
+paddleocr>=2.7.0
+paddlepaddle>=2.6.0

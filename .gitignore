@@ -1,0 +1,20 @@
+backend/.venv/
+backend/.pytest_cache/
+backend/__pycache__/
+backend/**/__pycache__/
+backend/bid_agent.db
+backend/data/
+backend/.env
+frontend/node_modules/
+frontend/dist/
+frontend/release/
+frontend/.env
+.DS_Store
+
+# 本地私有知识库内容（公司资料、业绩、设备清单等，不进公开仓库）
+backend/knowledge_base/共享/04_公司介绍/公司简介.md
+backend/knowledge_base/共享/04_公司介绍/售后服务.md
+backend/knowledge_base/共享/01_企业资质/生产设备.md
+backend/knowledge_base/国网专属/02_历史标书/业绩文件.md
+backend/knowledge_base/.obsidian/
+backend/knowledge_base/未命名.*

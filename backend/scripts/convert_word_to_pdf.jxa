@@ -1,0 +1,27 @@
+#!/usr/bin/osascript -l JavaScript
+
+/*
+ * 通过 Microsoft Word 将 .doc / .docx 原样导出为 PDF。
+ * 用法：osascript -l JavaScript convert_word_to_pdf.jxa <INPUT> <OUTPUT>
+ */
+
+ObjC.import("stdlib");
+
+function run(argv) {
+  const [inputPath, outputPath] = argv;
+  const word = Application("Microsoft Word");
+  word.activate();
+  delay(1);
+  word.open(Path(inputPath));
+  const doc = word.activeDocument;
+  try {
+    doc.saveAs({ fileName: outputPath, fileFormat: "format PDF" });
+    console.log(JSON.stringify({ result: "success", output: outputPath }));
+  } catch (e) {
+    console.log(JSON.stringify({ result: "error", error: e.toString() }));
+    $.exit(1);
+  } finally {
+    doc.close({ saving: "no" });
+  }
+  return "ok";
+}

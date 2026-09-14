@@ -1,0 +1,83 @@
+version: "3.8"
+
+services:
+  # tender-extract 抽取服务（按需启动：docker compose --profile extract up -d）
+  tender-extract:
+    image: ghcr.io/inupedia/tender-extract-server:0.1.0
+    profiles: ["extract"]
+    ports:
+      - "8000:8000"
+    volumes:
+      - tender-cache:/data/cache
+    restart: unless-stopped
+
+  redis:
+    image: redis:7-alpine
+    ports:
+      - "6379:6379"
+    restart: unless-stopped
+
+  postgres:
+    image: postgres:15-alpine
+    environment:
+      POSTGRES_USER: bid
+      POSTGRES_PASSWORD: bid_secret
+      POSTGRES_DB: bid_db
+    volumes:
+      - postgres_data:/var/lib/postgresql/data
+    restart: unless-stopped
+
+  api:
+    build:
+      context: .
+      dockerfile: Dockerfile.api
+    ports:
+      - "8080:8080"
+    depends_on:
+      - redis
+      - postgres
+    environment:
+      DATABASE_URL: postgresql+psycopg2://bid:bid_secret@postgres:5432/bid_db
+      REDIS_URL: redis://redis:6379/0
+      TENDER_EXTRACT_URL: http://tender-extract:8000
+      DATA_DIR: /data
+      BID_SYSTEM_ENV: production
+      BID_SYSTEM_SECRET_KEY: ${BID_SYSTEM_SECRET_KEY:-please-change-me}
+    volumes:
+      - bid_data:/data
+    restart: unless-stopped
+
+  worker:
+    build:
+      context: .
+      dockerfile: Dockerfile.worker
+    depends_on:
+      - redis
+      - postgres
+    environment:
+      DATABASE_URL: postgresql+psycopg2://bid:bid_secret@postgres:5432/bid_db
+      REDIS_URL: redis://redis:6379/0
+      TENDER_EXTRACT_URL: http://tender-extract:8000
+      DATA_DIR: /data
+      BID_SYSTEM_ENV: production
+      BID_SYSTEM_SECRET_KEY: ${BID_SYSTEM_SECRET_KEY:-please-change-me}
+    volumes:
+      - bid_data:/data
+    restart: unless-stopped
+
+  nginx:
+    image: nginx:alpine
+    profiles: ["web"]
+    ports:
+      - "80:80"
+    volumes:
+      - ./deploy/nginx.conf.example:/etc/nginx/nginx.conf:ro
+      - ./frontend/dist:/usr/share/nginx/html:ro
+    depends_on:
+      - api
+    restart: unless-stopped
+
+volumes:
+  bid_data:
+  postgres_data:
+  tender-cache:

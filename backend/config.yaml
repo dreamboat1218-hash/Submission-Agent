@@ -1,0 +1,27 @@
+# 招投标智能体系统配置文件
+knowledge_base:
+  # 知识库根目录路径（相对于 backend 运行目录或绝对路径）
+  root_path: "./knowledge_base"
+  # Pinakes 可执行文件路径
+  pinakes_bin: "./bin/pinakes"
+  # 检索参数
+  max_search_results: 5
+  search_timeout: 15
+  # 降级配置
+  fallback_on_error: true
+  # 目录结构（可自定义）
+  directories:
+    qualifications: "01_企业资质"
+    historical_bids: "02_历史标书"
+    policies: "03_行业政策"
+    company_info: "04_公司介绍"
+    templates: "05_投标模板"
+    product_docs: "06_产品资料"
+    system_generated: "_system_generated"
+  # 章节知识映射规则（方案 A：章节标题关键词 -> 知识库目录/标签；方案 B：检索词）
+  # chapter_rules:
+  #   - keywords: ["公司简介", "公司介绍"]
+  #     directories: ["04_公司介绍"]
+  #     tags: []
+  #     query: "公司简介 主营业务 核心能力"
+  #     max_items: 3
