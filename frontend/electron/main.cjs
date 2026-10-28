@@ -71,27 +71,38 @@ function wait(ms) {
   return new Promise((resolve) => setTimeout(resolve, ms));
 }
 
-function checkHealth(port) {
+function requestHealth(port, targetPath, timeout = 5000) {
   return new Promise((resolve) => {
     let body = '';
     const req = http.get(
-      { host: '127.0.0.1', port, path: '/api/health', timeout: 2000 },
+      { host: '127.0.0.1', port, path: targetPath, timeout },
       (res) => {
         res.setEncoding('utf8');
         res.on('data', (chunk) => {
           body += chunk;
         });
         res.on('end', () => {
-          resolve(res.statusCode === 200 && body.includes('"status":"ok"'));
+          resolve({ status: res.statusCode || 0, body });
         });
       },
     );
     req.on('timeout', () => {
       req.destroy();
-      resolve(false);
+      resolve({ status: 0, body });
     });
-    req.on('error', () => resolve(false));
+    req.on('error', () => resolve({ status: 0, body }));
   });
+}
+
+async function checkHealth(port) {
+  // 优先用轻量存活探针，避免 /api/health 探测外部服务导致超时
+  const live = await requestHealth(port, '/api/health/live');
+  if (live.status === 200 && live.body.includes('"status":"ok"')) return true;
+  if (live.status === 404) {
+    const legacy = await requestHealth(port, '/api/health');
+    return legacy.status === 200 && legacy.body.includes('"status":"ok"');
+  }
+  return false;
 }
 
 async function waitForPort(timeoutMs = 60000) {

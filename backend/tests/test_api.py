@@ -57,3 +57,9 @@ def test_full_pipeline_from_upload_to_download(client, auth_headers):
     download = client.get(f"/api/download/{task_id}", headers=auth_headers)
     assert download.status_code == 200
     assert len(download.content) > 1000
+
+
+def test_health_live_skips_external_probes(client):
+    response = client.get("/api/health/live")
+    assert response.status_code == 200
+    assert response.json()["status"] == "ok"

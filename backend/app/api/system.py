@@ -128,6 +128,12 @@ def _write_tender_server_env(settings) -> None:
     )
 
 
+@router.get("/health/live")
+def health_live() -> dict:
+    """轻量存活探针：不做任何外部服务探测，供桌面端启动检查使用。"""
+    return {"status": "ok", "version": __version__}
+
+
 @router.get("/health", response_model=HealthResponse)
 def health() -> HealthResponse:
     settings = get_settings()
