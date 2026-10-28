@@ -157,13 +157,14 @@ def _run_biaoshu(task: Task, data: dict, industry: str, output_dir: Path, target
     run_dir = Path(task.work_dir) / "biaoshu_run"
     run_dir.mkdir(parents=True, exist_ok=True)
     combined = Path(task.work_dir) / "combined.md"
-    input_txt = run_dir / "tender_input.txt"
+    # BiaoShu 脚本以自己的目录为 cwd 执行，路径必须绝对，否则解析不到输入文件
+    input_txt = (run_dir / "tender_input.txt").resolve()
     if combined.exists():
         shutil.copy2(combined, input_txt)
     else:
         input_txt.write_text(_data_text(data), encoding="utf-8")
 
-    out_dir = run_dir / "out"
+    out_dir = (run_dir / "out").resolve()
     command = [
         sys.executable,
         str(pipeline_script),

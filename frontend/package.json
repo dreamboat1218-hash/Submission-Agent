@@ -10,6 +10,8 @@
     "build": "tsc --noEmit && vite build",
     "preview": "vite preview --host 127.0.0.1 --port 4173",
     "dist": "npm run build && electron-builder",
+    "dist:win": "npm run build && electron-builder --win nsis portable",
+    "dist:mac": "npm run build && electron-builder --mac",
     "postinstall": "electron-builder install-app-deps"
   },
   "build": {
@@ -23,6 +25,12 @@
       "electron/**/*",
       "package.json"
     ],
+    "extraResources": [
+      {
+        "from": "../backend/dist/bid-agent-backend",
+        "to": "backend"
+      }
+    ],
     "mac": {
       "target": [
         "dmg",
@@ -32,8 +40,17 @@
     "win": {
       "target": [
         "nsis",
-        "zip"
-      ]
+        "portable"
+      ],
+      "artifactName": "${productName}-${version}-${arch}.${ext}"
+    },
+    "nsis": {
+      "oneClick": false,
+      "perMachine": false,
+      "allowToChangeInstallationDirectory": true,
+      "createDesktopShortcut": true,
+      "createStartMenuShortcut": true,
+      "shortcutName": "招投标智能体"
     },
     "linux": {
       "target": [

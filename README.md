@@ -340,6 +340,54 @@ cd frontend
 npm run build
 ```
 
+## Windows 桌面版打包
+
+桌面版 = Electron 外壳 + 内置 Python 后端（PyInstaller 打包，自带前端静态页）。双击启动后无需另开终端，Electron 会自动拉起后端并加载界面。
+
+> PyInstaller 不支持跨平台编译，Windows 安装包必须在 Windows 上构建。仓库已配置 GitHub Actions，推送后自动构建并上传安装包。
+
+### 方式一：GitHub Actions（推荐）
+
+推送到 `main` 后自动运行 `.github/workflows/build-windows.yml`：
+
+1. 打开仓库 **Actions → Build Windows App → 最近一次运行**
+2. 在页面底部 **Artifacts** 下载 `bid-agent-windows`
+3. 解压后解压后得到 NSIS 安装包与 portable 免安装版，双击即可运行
+
+### 方式二：本地 Windows 构建
+
+```powershell
+git clone https://github.com/dreamboat1218-hash/Submission-Agent.git
+cd Submission-Agent
+
+# 1. 前端
+cd frontend
+npm ci
+npm run build
+
+# 2. 后端可执行文件
+cd ..\backend
+.\build_windows.ps1
+
+# 3. Electron 安装包
+cd ..\frontend
+npx electron-builder --win nsis portable
+```
+
+产物在 `frontend\release\`。
+
+### 桌面版数据目录
+
+| 平台 | 路径 |
+| --- | --- |
+| Windows | `%LOCALAPPDATA%\BidAgent` |
+| macOS | `~/Library/Application Support/BidAgent` |
+| Linux | `~/.local/share/BidAgent` |
+
+包含 `data/`（任务、SQLite、生成文件）、`data/kb/`（首次运行自动复制的知识库示例）与 `secret.key`（JWT 密钥）。
+
+桌面版默认使用进程内线程池（`REDIS_URL` 置空），**不需要 Redis 与 Celery**；BiaoShu-SKILL 默认关闭，使用内置 DOCX 生成器。
+
 ## Docker 部署
 
 ```bash

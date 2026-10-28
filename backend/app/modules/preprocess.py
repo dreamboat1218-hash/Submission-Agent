@@ -5,6 +5,7 @@
 """
 from __future__ import annotations
 
+import hashlib
 import json
 import logging
 import os
@@ -12,7 +13,7 @@ import shutil
 import tarfile
 import zipfile
 from datetime import datetime, timezone
-from pathlib import Path
+from pathlib import Path, PurePosixPath
 from typing import Callable
 
 from sqlalchemy.orm import Session
@@ -29,6 +30,17 @@ IMAGE_EXTS = {".png", ".jpg", ".jpeg", ".bmp", ".tif", ".tiff", ".webp"}
 SUPPORTED_EXTS = DOCUMENT_EXTS | IMAGE_EXTS
 
 ProgressCallback = Callable[[float, str], None]
+
+
+def _md_target_name(rel: Path) -> str:
+    """生成不会超过文件系统上限的 Markdown 文件名（可读前缀 + 短哈希防重名）。"""
+    digest = hashlib.sha1(rel.as_posix().encode("utf-8")).hexdigest()[:10]
+    raw = (rel.stem or "document").strip().encode("utf-8")
+    if len(raw) > 80:
+        stem = raw[:80].decode("utf-8", errors="ignore").strip()
+    else:
+        stem = raw.decode("utf-8", errors="ignore").strip()
+    return f"{stem or 'document'}__{digest}.md"
 
 
 def run(task_id: str, progress_cb: ProgressCallback | None = None) -> dict:
@@ -72,7 +84,7 @@ def run(task_id: str, progress_cb: ProgressCallback | None = None) -> dict:
         rel = file_path.relative_to(input_dir)
         entry_warnings: list[str] = []
         try:
-            md_path, page_count = convert_to_markdown(file_path, md_dir / f"{rel.as_posix().replace('/', '__')}.md")
+            md_path, page_count = convert_to_markdown(file_path, md_dir / _md_target_name(rel))
             status = "converted"
         except Exception as exc:
             logger.exception("convert failed: %s", file_path)
@@ -172,9 +184,37 @@ def _decode_zip_name(name: str) -> str:
         return name
 
 
+MAX_PATH_BYTES = 900
+MAX_COMPONENT_BYTES = 180
+
+
+def _shorten_name(name: str, budget: int) -> str:
+    """按 UTF-8 字节预算截断路径段，保留可读前缀 + 短哈希避免重名。"""
+    raw = name.encode("utf-8")
+    if len(raw) <= budget:
+        return name
+    stem, dot, ext = name.rpartition(".")
+    if not dot:
+        stem, ext = name, ""
+    digest = hashlib.sha1(raw).hexdigest()[:8]
+    suffix = f"_{digest}" + (f".{ext}" if ext else "")
+    keep = max(budget - len(suffix.encode("utf-8")), 16)
+    prefix = stem.encode("utf-8")[:keep].decode("utf-8", errors="ignore").rstrip()
+    return f"{prefix or 'file'}{suffix}"
+
+
 def _safe_target(dest: Path, name: str) -> Path:
-    target = (dest / name).resolve()
-    if not target.is_relative_to(dest.resolve()):
+    dest_root = dest.resolve()
+    parts = [part for part in PurePosixPath(name.replace("\\", "/")).parts if part not in ("", ".")]
+    if not parts:
+        return dest_root
+    parts = [_shorten_name(part, MAX_COMPONENT_BYTES) for part in parts]
+    candidate = dest_root.joinpath(*parts)
+    if len(str(candidate).encode("utf-8")) > MAX_PATH_BYTES:
+        parts = [_shorten_name(part, 40) for part in parts[:-1]] + [_shorten_name(parts[-1], 90)]
+        candidate = dest_root.joinpath(*parts)
+    target = candidate.resolve()
+    if target != dest_root and not target.is_relative_to(dest_root):
         raise RuntimeError(f"path traversal detected: {name}")
     return target
 
@@ -222,6 +262,8 @@ def extract_archive(
     for child in sorted(dest.rglob("*")):
         if not child.is_file():
             continue
+        if child.name.startswith("._") or "__MACOSX" in child.parts:
+            continue
         if child.suffix.lower() in ARCHIVE_EXTS or _is_nested_archive(child):
             extract_archive(
                 child,
@@ -242,6 +284,8 @@ def _extract_zip(archive_path: Path, dest: Path, passwords: tuple[str, ...], con
             return
         for info in members:
             name = _decode_zip_name(info.filename)
+            if name.startswith("._") or "__MACOSX" in name:
+                continue
             target = _safe_target(dest, name)
             if info.is_dir():
                 target.mkdir(parents=True, exist_ok=True)
@@ -434,43 +478,53 @@ def _convert_docx(source: Path, md_path: Path) -> int:
 
 
 def _convert_doc_legacy(source: Path, md_path: Path) -> int:
-    """旧版二进制 Word（.doc / 伪装成 .docx）通过 textutil 或 antiword 转换。"""
+    """旧版二进制 Word（.doc / 伪装成 .docx）通过 textutil 或 antiword 转换。
+
+    macOS 的 textutil 在超长中文路径下会误报"文件不存在"且仍返回 0，
+    因此先复制到短临时路径再转换，并校验输出文件是否真的生成。
+    """
     import shutil
     import subprocess
+    import tempfile
 
     textutil = shutil.which("textutil")
-    if textutil:
-        txt_path = md_path.with_suffix(".txt")
-        result = subprocess.run(
-            [textutil, "-convert", "txt", str(source), "-output", str(txt_path)],
-            capture_output=True,
-            text=True,
-            timeout=60,
-        )
-        if result.returncode != 0:
-            raise RuntimeError(f"textutil 转换失败：{result.stderr[-300:]}")
-        data = txt_path.read_bytes()
-        txt_path.unlink(missing_ok=True)
-        for encoding in ("utf-8-sig", "utf-16", "gbk"):
-            try:
-                text = data.decode(encoding)
-                break
-            except UnicodeDecodeError:
-                continue
-        else:
-            text = data.decode("utf-8", errors="replace")
-        md_path.write_text(f"# {source.name}\n\n{text}", encoding="utf-8")
-        return 0
-
     antiword = shutil.which("antiword")
-    if antiword:
-        result = subprocess.run([antiword, str(source)], capture_output=True, text=True, timeout=60)
+    if not textutil and not antiword:
+        raise RuntimeError("未找到 textutil/antiword，无法解析旧版 Word 文档")
+
+    with tempfile.TemporaryDirectory(prefix="bid_doc_") as tmp:
+        tmp_dir = Path(tmp)
+        safe_source = tmp_dir / f"source{source.suffix.lower() or '.doc'}"
+        shutil.copy2(source, safe_source)
+
+        if textutil:
+            txt_path = tmp_dir / "output.txt"
+            result = subprocess.run(
+                [textutil, "-convert", "txt", str(safe_source), "-output", str(txt_path)],
+                capture_output=True,
+                text=True,
+                timeout=60,
+            )
+            if result.returncode != 0 or not txt_path.exists():
+                detail = (result.stderr or result.stdout or "").strip()[-300:] or "未生成输出文件"
+                raise RuntimeError(f"textutil 转换失败：{detail}")
+            data = txt_path.read_bytes()
+            for encoding in ("utf-8-sig", "utf-16", "gbk"):
+                try:
+                    text = data.decode(encoding)
+                    break
+                except UnicodeDecodeError:
+                    continue
+            else:
+                text = data.decode("utf-8", errors="replace")
+            md_path.write_text(f"# {source.name}\n\n{text}", encoding="utf-8")
+            return 0
+
+        result = subprocess.run([antiword, str(safe_source)], capture_output=True, text=True, timeout=60)
         if result.returncode != 0:
             raise RuntimeError(f"antiword 转换失败：{result.stderr[-300:]}")
         md_path.write_text(f"# {source.name}\n\n{result.stdout}", encoding="utf-8")
         return 0
-
-    raise RuntimeError("未找到 textutil/antiword，无法解析旧版 Word 文档")
 
 
 def _table_to_markdown(table) -> str:

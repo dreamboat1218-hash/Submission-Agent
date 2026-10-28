@@ -1,4 +1,5 @@
 backend/.venv/
+backend/.venv.broken-*/
 backend/.pytest_cache/
 backend/__pycache__/
 backend/**/__pycache__/
@@ -18,3 +19,9 @@ backend/knowledge_base/共享/01_企业资质/生产设备.md
 backend/knowledge_base/国网专属/02_历史标书/业绩文件.md
 backend/knowledge_base/.obsidian/
 backend/knowledge_base/未命名.*
+
+# 桌面端打包产物
+backend/build/
+backend/dist/
+backend/*.spec
+frontend/release/

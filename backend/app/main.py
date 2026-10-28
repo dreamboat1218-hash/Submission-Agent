@@ -1,10 +1,14 @@
 from __future__ import annotations
 
 import logging
+import os
 from contextlib import asynccontextmanager
+from pathlib import Path
 
-from fastapi import FastAPI
+from fastapi import FastAPI, HTTPException
 from fastapi.middleware.cors import CORSMiddleware
+from fastapi.responses import FileResponse
+from fastapi.staticfiles import StaticFiles
 
 from . import __version__
 from .config import get_settings
@@ -63,6 +67,33 @@ app.include_router(system.router, prefix="/api")
 app.include_router(ws.router)
 
 
+def _frontend_dist() -> Path | None:
+    """桌面模式下由 FRONTEND_DIST 指定前端构建产物目录。"""
+    raw = os.getenv("FRONTEND_DIST", "").strip()
+    if not raw:
+        return None
+    dist = Path(raw)
+    return dist if (dist / "index.html").exists() else None
+
+
 @app.get("/", include_in_schema=False)
-def root() -> dict:
+def root():
+    dist = _frontend_dist()
+    if dist is not None:
+        return FileResponse(dist / "index.html")
     return {"name": settings.app_name, "version": __version__, "docs": "/docs"}
+
+
+_dist = _frontend_dist()
+if _dist is not None:
+    if (_dist / "assets").is_dir():
+        app.mount("/assets", StaticFiles(directory=_dist / "assets"), name="assets")
+
+    @app.get("/{path:path}", include_in_schema=False)
+    def spa_fallback(path: str):
+        if path.startswith(("api/", "ws/")):
+            raise HTTPException(status_code=404, detail="Not Found")
+        candidate = (_dist / path).resolve()
+        if path and candidate.is_file() and candidate.is_relative_to(_dist.resolve()):
+            return FileResponse(candidate)
+        return FileResponse(_dist / "index.html")

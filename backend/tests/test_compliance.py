@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+from datetime import datetime, timedelta
 from pathlib import Path
 
 from docx import Document
@@ -28,6 +29,8 @@ def _make_docx(path: Path, price_line: str | None = None) -> None:
 
 
 def _task_with(path: Path, budget: float) -> Task:
+    deadline = (datetime.now() + timedelta(days=30)).strftime("%Y-%m-%d 17:00")
+    opening = (datetime.now() + timedelta(days=38)).strftime("%Y-%m-%d 09:30")
     factory = get_session_factory()
     with factory() as db:
         task = Task(
@@ -39,8 +42,8 @@ def _task_with(path: Path, budget: float) -> Task:
             extracted_data={
                 "project_name": {"primary_value": "智慧交通建设项目", "confidence": 0.99, "evidence": {}},
                 "budget": {"primary_value": budget, "confidence": 0.99, "evidence": {}},
-                "bid_deadline": {"primary_value": "2026-09-30 17:00", "confidence": 0.99, "evidence": {}},
-                "bid_opening_time": {"primary_value": "2026-10-08 09:30", "confidence": 0.99, "evidence": {}},
+                "bid_deadline": {"primary_value": deadline, "confidence": 0.99, "evidence": {}},
+                "bid_opening_time": {"primary_value": opening, "confidence": 0.99, "evidence": {}},
                 "bid_security_amount": {"primary_value": 80000.0, "confidence": 0.99, "evidence": {}},
                 "qualifications": {
                     "primary_value": ["ISO9001质量管理体系认证", "电子与智能化工程专业承包二级"],
