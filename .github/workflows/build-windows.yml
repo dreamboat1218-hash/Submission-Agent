@@ -53,9 +53,29 @@ jobs:
         shell: pwsh
         run: ./build_windows.ps1 -SkipInstall
 
+      - name: 复制后端到前端工程
+        shell: pwsh
+        run: |
+          New-Item -ItemType Directory -Force -Path frontend/backend-bin | Out-Null
+          Copy-Item backend/dist/bid-agent-backend.exe frontend/backend-bin/bid-agent-backend.exe -Force
+          Get-Item frontend/backend-bin/bid-agent-backend.exe | Select-Object FullName, Length
+
       - name: 打包 Electron 安装包
         working-directory: frontend
         run: npx electron-builder --win nsis portable --publish never
+
+      - name: 校验打包结果内含后端
+        shell: pwsh
+        run: |
+          $unpacked = Get-ChildItem frontend/release -Directory -Filter "win-*-unpacked" -ErrorAction SilentlyContinue | Select-Object -First 1
+          if (-not $unpacked) { throw "未找到 win-*-unpacked 目录，打包未完成" }
+          $exe = Join-Path $unpacked.FullName "resources\backend\bid-agent-backend.exe"
+          if (-not (Test-Path $exe)) {
+            Write-Host "resources 目录内容："
+            Get-ChildItem (Join-Path $unpacked.FullName "resources") -Recurse -Depth 2 | Select-Object FullName
+            throw "安装包缺少内置后端：$exe"
+          }
+          Write-Host "校验通过：$exe ($((Get-Item $exe).Length) 字节)"
 
       - name: 上传构建产物
         uses: actions/upload-artifact@v4

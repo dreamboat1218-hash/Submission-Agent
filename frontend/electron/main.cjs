@@ -48,6 +48,25 @@ function backendExecutable() {
   return candidates.find((candidate) => fs.existsSync(candidate)) || '';
 }
 
+function describeResources() {
+  const resources = process.resourcesPath || '';
+  const lines = [];
+  for (const relative of ['', 'backend']) {
+    const dir = path.join(resources, relative);
+    try {
+      const names = fs
+        .readdirSync(dir, { withFileTypes: true })
+        .slice(0, 40)
+        .map((entry) => entry.name)
+        .join(', ');
+      lines.push(`${relative || '.'}\\: ${names || '(空目录)'}`);
+    } catch (error) {
+      lines.push(`${relative || '.'}\\: 读取失败 ${error.message}`);
+    }
+  }
+  return lines.join('\n');
+}
+
 function wait(ms) {
   return new Promise((resolve) => setTimeout(resolve, ms));
 }
@@ -92,7 +111,9 @@ async function waitForHealth(port, timeoutMs = 90000) {
 async function startBackend() {
   const exe = backendExecutable();
   if (!exe) {
-    throw new Error(`未找到内置后端：${path.join(process.resourcesPath || '', 'backend')}`);
+    throw new Error(
+      `未找到内置后端：${path.join(process.resourcesPath || '', 'backend')}\n${describeResources()}`,
+    );
   }
   backendPort = null;
   backendFailure = '';
