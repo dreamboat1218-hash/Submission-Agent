@@ -67,8 +67,10 @@ jobs:
       - name: 校验打包结果内含后端
         shell: pwsh
         run: |
-          $unpacked = Get-ChildItem frontend/release -Directory -Filter "win-*-unpacked" -ErrorAction SilentlyContinue | Select-Object -First 1
-          if (-not $unpacked) { throw "未找到 win-*-unpacked 目录，打包未完成" }
+          Write-Host "release 目录内容："
+          Get-ChildItem frontend/release | Select-Object Name, Length
+          $unpacked = Get-ChildItem frontend/release -Directory -Filter "win*unpacked" -ErrorAction SilentlyContinue | Select-Object -First 1
+          if (-not $unpacked) { throw "未找到 win*unpacked 目录，打包未完成" }
           $exe = Join-Path $unpacked.FullName "resources\backend\bid-agent-backend.exe"
           if (-not (Test-Path $exe)) {
             Write-Host "resources 目录内容："

@@ -27,8 +27,8 @@
     ],
     "extraResources": [
       {
-        "from": "backend-bin/bid-agent-backend.exe",
-        "to": "backend/bid-agent-backend.exe"
+        "from": "backend-bin",
+        "to": "backend"
       }
     ],
     "mac": {
