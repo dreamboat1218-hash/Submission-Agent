@@ -93,6 +93,10 @@ def configure_environment() -> int:
 
 
 def main() -> None:
+    for stream in (sys.stdout, sys.stderr):
+        reconfigure = getattr(stream, "reconfigure", None)
+        if callable(reconfigure):
+            reconfigure(encoding="utf-8", errors="replace")
     port = configure_environment()
     import uvicorn
 

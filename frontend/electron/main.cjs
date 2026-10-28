@@ -1,5 +1,5 @@
 const { app, BrowserWindow, shell } = require('electron');
-const { spawn } = require('child_process');
+const { spawn, spawnSync } = require('child_process');
 const fs = require('fs');
 const http = require('http');
 const path = require('path');
@@ -73,11 +73,17 @@ function wait(ms) {
 
 function checkHealth(port) {
   return new Promise((resolve) => {
+    let body = '';
     const req = http.get(
       { host: '127.0.0.1', port, path: '/api/health', timeout: 2000 },
       (res) => {
-        res.resume();
-        resolve(res.statusCode === 200);
+        res.setEncoding('utf8');
+        res.on('data', (chunk) => {
+          body += chunk;
+        });
+        res.on('end', () => {
+          resolve(res.statusCode === 200 && body.includes('"status":"ok"'));
+        });
       },
     );
     req.on('timeout', () => {
@@ -108,7 +114,19 @@ async function waitForHealth(port, timeoutMs = 90000) {
   throw new Error(`内置后端健康检查超时（端口 ${port}）`);
 }
 
+async function findRunningBackend() {
+  for (let port = 8080; port <= 8089; port += 1) {
+    if (await checkHealth(port)) return port;
+  }
+  return null;
+}
+
 async function startBackend() {
+  const existing = await findRunningBackend();
+  if (existing) {
+    writeLog(`[reuse] 复用已在运行的内置后端：端口 ${existing}`);
+    return existing;
+  }
   const exe = backendExecutable();
   if (!exe) {
     throw new Error(
@@ -153,7 +171,7 @@ function stopBackend() {
   const pid = backendProcess.pid;
   backendProcess = null;
   if (process.platform === 'win32') {
-    spawn('taskkill', ['/pid', String(pid), '/T', '/F'], { windowsHide: true });
+    spawnSync('taskkill', ['/pid', String(pid), '/T', '/F'], { windowsHide: true });
   } else {
     try {
       process.kill(pid, 'SIGTERM');
@@ -232,17 +250,32 @@ async function bootstrap() {
   }
 }
 
-app.whenReady().then(bootstrap);
+const gotSingleInstanceLock = app.requestSingleInstanceLock();
 
-app.on('activate', () => {
-  if (BrowserWindow.getAllWindows().length === 0) {
-    void bootstrap();
-  }
-});
+if (!gotSingleInstanceLock) {
+  app.quit();
+} else {
+  app.on('second-instance', () => {
+    if (!mainWindow) return;
+    if (mainWindow.isMinimized()) mainWindow.restore();
+    mainWindow.show();
+    mainWindow.focus();
+  });
 
-app.on('window-all-closed', () => {
-  stopBackend();
-  if (process.platform !== 'darwin') app.quit();
-});
+  app.whenReady().then(bootstrap);
 
-app.on('before-quit', stopBackend);
+  app.on('activate', () => {
+    if (BrowserWindow.getAllWindows().length === 0) {
+      void bootstrap();
+    }
+  });
+
+  app.on('window-all-closed', () => {
+    stopBackend();
+    if (process.platform !== 'darwin') app.quit();
+  });
+
+  app.on('before-quit', stopBackend);
+  app.on('will-quit', stopBackend);
+  process.on('exit', stopBackend);
+}
