@@ -1,5 +1,8 @@
 name: Build Windows App
 
+permissions:
+  contents: write
+
 on:
   workflow_dispatch:
   push:
@@ -63,3 +66,22 @@ jobs:
             frontend/release/*.zip
           if-no-files-found: warn
           retention-days: 30
+
+      - name: 发布 Release（可直接下载）
+        uses: softprops/action-gh-release@v2
+        with:
+          tag_name: v0.1.0-win.${{ github.run_number }}
+          name: 招投标智能体 Windows 版 v0.1.0 (build ${{ github.run_number }})
+          body: |
+            自动构建的 Windows 安装包与免安装版。
+
+            - **安装版**：文件名含 `Setup`，双击安装后从开始菜单启动
+            - **免安装版**：直接双击 `.exe` 运行，无需安装
+            - 内置 Python 后端与前端页面，无需另装 Python / Node / Redis
+
+            构建提交：${{ github.sha }}
+          files: |
+            frontend/release/*.exe
+            frontend/release/*.zip
+          draft: false
+          prerelease: false

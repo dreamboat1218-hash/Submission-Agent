@@ -41,8 +41,7 @@
       "target": [
         "nsis",
         "portable"
-      ],
-      "artifactName": "${productName}-${version}-${arch}.${ext}"
+      ]
     },
     "nsis": {
       "oneClick": false,
