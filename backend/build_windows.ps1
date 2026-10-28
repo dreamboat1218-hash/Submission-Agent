@@ -20,7 +20,7 @@ if (-not (Test-Path (Join-Path $dist "index.html"))) {
 
 $knowledge = Join-Path $backend "knowledge_base"
 
-pyinstaller --noconfirm --clean --onedir --name bid-agent-backend `
+pyinstaller --noconfirm --clean --onefile --name bid-agent-backend `
     --add-data "$dist;frontend/dist" `
     --add-data "$knowledge;knowledge_base" `
     --hidden-import uvicorn.logging `
@@ -33,7 +33,7 @@ pyinstaller --noconfirm --clean --onedir --name bid-agent-backend `
     --collect-data docx `
     desktop_app.py
 
-$exe = Join-Path $backend "dist\bid-agent-backend\bid-agent-backend.exe"
+$exe = Join-Path $backend "dist\bid-agent-backend.exe"
 if (-not (Test-Path $exe)) {
     throw "PyInstaller 构建失败，未生成 $exe"
 }
