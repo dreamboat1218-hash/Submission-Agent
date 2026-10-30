@@ -79,6 +79,7 @@ def configure_environment() -> int:
 
     os.environ["BID_SYSTEM_ENV"] = "development"
     os.environ.setdefault("BID_SYSTEM_DEBUG", "false")
+    os.environ.setdefault("JWT_EXPIRE_HOURS", "168")
     os.environ["BID_SYSTEM_SECRET_KEY"] = _ensure_secret(data_root / "secret.key")
     os.environ["DATA_DIR"] = str(data_dir)
     os.environ["TEMP_DIR"] = str(data_dir / "tmp")

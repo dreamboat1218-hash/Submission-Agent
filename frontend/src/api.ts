@@ -37,6 +37,11 @@ async function request<T>(path: string, init: RequestInit = {}): Promise<T> {
     headers['Content-Type'] = 'application/json';
   }
   const response = await fetch(path, { ...init, headers });
+  if (response.status === 401) {
+    setToken(null);
+    window.dispatchEvent(new Event('bid-agent:unauthorized'));
+    throw new Error('登录已过期，请重新登录');
+  }
   if (!response.ok) {
     let detail = response.statusText;
     try {

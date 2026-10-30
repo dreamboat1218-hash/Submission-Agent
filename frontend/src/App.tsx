@@ -37,6 +37,16 @@ export default function App() {
     });
   }, [token]);
 
+  useEffect(() => {
+    const handleUnauthorized = () => {
+      setToken(null);
+      setTokenState(null);
+      setUser(null);
+    };
+    window.addEventListener('bid-agent:unauthorized', handleUnauthorized);
+    return () => window.removeEventListener('bid-agent:unauthorized', handleUnauthorized);
+  }, []);
+
   if (!token) {
     return (
       <Login
