@@ -19,10 +19,14 @@ if (-not (Test-Path (Join-Path $dist "index.html"))) {
 }
 
 $knowledge = Join-Path $backend "knowledge_base"
+$templates = Join-Path $backend "templates"
+$scripts = Join-Path $backend "scripts"
 
 pyinstaller --noconfirm --clean --onefile --name bid-agent-backend `
     --add-data "$dist;frontend/dist" `
     --add-data "$knowledge;knowledge_base" `
+    --add-data "$templates;templates" `
+    --add-data "$scripts;scripts" `
     --hidden-import uvicorn.logging `
     --hidden-import uvicorn.loops.auto `
     --hidden-import uvicorn.protocols.http.auto `

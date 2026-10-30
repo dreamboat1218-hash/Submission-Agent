@@ -60,6 +60,22 @@ jobs:
           Copy-Item backend/dist/bid-agent-backend.exe frontend/backend-bin/bid-agent-backend.exe -Force
           Get-Item frontend/backend-bin/bid-agent-backend.exe | Select-Object FullName, Length
 
+      - name: 校验后端内置投标模板
+        shell: pwsh
+        run: |
+          $out = "backend\dist\asset_check.log"
+          $err = "backend\dist\asset_check.err.log"
+          $proc = Start-Process -FilePath "backend\dist\bid-agent-backend.exe" `
+            -RedirectStandardOutput $out -RedirectStandardError $err -PassThru -WindowStyle Hidden
+          Start-Sleep -Seconds 25
+          if (-not $proc.HasExited) { Stop-Process -Id $proc.Id -Force }
+          Write-Host "--- 后端输出 ---"
+          Get-Content $out -ErrorAction SilentlyContinue
+          Get-Content $err -ErrorAction SilentlyContinue
+          if (-not (Select-String -Path $out -Pattern "存在=True" -Quiet)) {
+            throw "内置投标格式模板缺失，打包后的投标文件会与源码运行结果不一致"
+          }
+
       - name: 打包 Electron 安装包
         working-directory: frontend
         run: npx electron-builder --win nsis portable --publish never

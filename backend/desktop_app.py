@@ -99,6 +99,8 @@ def main() -> None:
         if callable(reconfigure):
             reconfigure(encoding="utf-8", errors="replace")
     port = configure_environment()
+    template = _resource_root() / "templates" / "投标格式.docx"
+    print(f"[assets] 投标格式模板：{template} | 存在={template.exists()}", flush=True)
     import uvicorn
 
     from app.main import app

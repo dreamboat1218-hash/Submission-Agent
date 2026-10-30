@@ -8,6 +8,7 @@ from __future__ import annotations
 import copy
 import json
 import logging
+import os
 import threading
 from pathlib import Path
 
@@ -70,7 +71,17 @@ DEFAULT_CHAPTER_RULES = [
 
 
 _BACKEND_ROOT = Path(__file__).resolve().parent.parent.parent
-_rules_path = _BACKEND_ROOT / "data" / "kb_chapter_rules.json"
+
+
+def _data_root() -> Path:
+    """桌面端使用 DATA_DIR（用户目录），源码调试时回落到 backend/data。"""
+    configured = os.getenv("DATA_DIR", "").strip()
+    if configured:
+        return Path(configured)
+    return _BACKEND_ROOT / "data"
+
+
+_rules_path = _data_root() / "kb_chapter_rules.json"
 _cache: list[dict] | None = None
 _lock = threading.Lock()
 
