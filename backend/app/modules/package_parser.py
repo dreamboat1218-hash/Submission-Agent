@@ -330,11 +330,13 @@ def parse_task_packages(task_id: str) -> dict:
         _write_packages_json(work_dir, result)
         return result
 
+    subproject_dirs = _detect_subproject_dirs(archives, roots)
     packages: list[dict] = []
     for archive_path in archives:
+        resolved_dir = subproject_dirs.get(archive_path) or archive_path.parent.name
         try:
             package = parse_package_archive(archive_path, work_dir)
-            package["subproject_dir"] = _top_level_subproject_dir(archive_path, roots)
+            package["subproject_dir"] = resolved_dir
             packages.append(package)
         except Exception as exc:
             logger.warning("标包解析失败 %s: %s", archive_path.name, exc)
@@ -342,7 +344,7 @@ def parse_task_packages(task_id: str) -> dict:
                 {
                     "package_no": _package_no_from_name(archive_path.name),
                     "package_name": "",
-                    "subproject_dir": _top_level_subproject_dir(archive_path, roots),
+                    "subproject_dir": resolved_dir,
                     "source_archive": archive_path.name,
                     "tech_spec_code": "",
                     "warnings": [f"{type(exc).__name__}: {exc}"],
@@ -386,22 +388,27 @@ def parse_task_packages(task_id: str) -> dict:
         if package.get("subproject_dir") in {"", input_dir.name}:
             inferred = _infer_subproject_dir(package, list_paths)
             package["subproject_dir"] = inferred or package.get("分标名称") or "未分组"
+        # 分标目录/分标名称权重最高，其次技术规范编码、来源压缩包，包号仅作兜底
         queries = [
-            package.get("subproject_dir", ""),
-            package.get("包号", ""),
-            package.get("包名称", ""),
-            package.get("技术规范编码", ""),
-            package.get("source_archive", ""),
+            (package.get("subproject_dir", ""), 5),
+            (package.get("分标名称", ""), 5),
+            (package.get("技术规范编码", ""), 4),
+            (package.get("source_archive", ""), 3),
+            (package.get("包名称", ""), 2),
+            (package.get("包号", ""), 1),
         ]
-        row = _match_list_row(list_rows, [query for query in queries if query])
+        active_queries = [(text, weight) for text, weight in queries if str(text or "").strip()]
+        row = _match_list_row(list_rows, active_queries)
         if row:
             _merge_row_fields(package, row)
-        notice_row = _best_row(notice_rows, [query for query in queries if query])
+            _apply_subproject_row(package, row)
+        notice_row = _best_row(notice_rows, active_queries)
         if notice_row:
             notice_fields = _row_fields(notice_row)
             for key, value in notice_fields.items():
                 if not package.get(key) and value and not _is_placeholder(value):
                     package[key] = value
+            _apply_subproject_row(package, notice_row)
 
     packages = _merge_duplicate_packages(packages)
     packages.sort(key=lambda item: _package_index(item.get("package_no", "")))
@@ -424,21 +431,34 @@ def parse_task_packages(task_id: str) -> dict:
     _attach_score_rules(work_dir, packages, subprojects)
     _attach_qualification_rules(work_dir, packages, subprojects)
     _attach_score_weights(work_dir, packages, subprojects)
+    # 多个分标时，项目级的分标名称/编号不应代表任一分支，留空避免串用
+    if len(subprojects) > 1:
+        for field in ("分标名称", "分标编号", "subproject_name", "subproject_number"):
+            project[field] = ""
     for subproject in subprojects:
-        for field in ("项目名称", "项目编号", "分标名称", "分标编号"):
+        for field in ("项目名称", "项目编号"):
             if not project.get(field) and subproject.get(field):
                 project[field] = subproject[field]
     for key, label in META_CHINESE.items():
         if not project.get(label):
             project[label] = project.get(key, "")
     for subproject in subprojects:
-        for field in ("分标名称", "分标编号", "项目名称", "项目编号"):
+        # 只回填项目级字段；分标名称/编号必须由各分标自身数据决定，避免张冠李戴
+        for field in ("项目名称", "项目编号"):
             if not subproject.get(field) and project.get(field):
                 subproject[field] = project[field]
+    subproject_by_dir = {str(item.get("source_dir") or ""): item for item in subprojects}
     for package in packages:
         for key, label in META_CHINESE.items():
-            if not package.get(label):
-                package[label] = package.get(key) or project.get(key) or project.get(label) or ""
+            if package.get(label):
+                continue
+            value = package.get(key)
+            if not value and label in {"分标名称", "分标编号"}:
+                owner = subproject_by_dir.get(str(package.get("subproject_dir") or ""))
+                value = owner.get(label) if owner else ""
+            if not value:
+                value = project.get(key) or project.get(label) or ""
+            package[label] = value
     for target in [project, *subprojects, *packages]:
         if not target.get("项目编号") and target.get("招标编号"):
             target["项目编号"] = target["招标编号"]
@@ -625,18 +645,39 @@ def _parse_table_rows(text: str) -> list[dict[str, str]]:
     return rows
 
 
-def _match_list_row(rows: list[dict[str, str]], queries: list[str]) -> dict[str, str] | None:
+def _match_list_row(rows: list[dict[str, str]], queries: list) -> dict[str, str] | None:
     return _best_row(rows, queries)
 
 
-def _best_row(rows: list[dict[str, str]], queries: list[str]) -> dict[str, str] | None:
+def _best_row(rows: list[dict[str, str]], queries: list) -> dict[str, str] | None:
+    """按加权关键词匹配表格行；元组形式 (关键词, 权重)，字符串默认权重 1。"""
+    weighted: list[tuple[str, int]] = []
+    for query in queries:
+        if isinstance(query, tuple):
+            text, weight = query
+        else:
+            text, weight = query, 1
+        text = str(text or "").strip()
+        if text and text != "未分组":
+            weighted.append((text, int(weight)))
+    if not weighted:
+        return None
     best: dict[str, str] | None = None
     best_score = 0
     for row in rows:
         row_text = " ".join(value for value in row.values() if value)
         if not row_text:
             continue
-        score = sum(1 for query in queries if query and query != "未分组" and query in row_text)
+        cells = {str(value).strip() for value in row.values() if value}
+        score = 0
+        for text, weight in weighted:
+            if text not in row_text:
+                continue
+            # 单元格精确命中优先于包含匹配，避免“网络特征分析平台”匹配到“网络特征分析平台-全流量威胁分析”
+            score += weight * (2 if text in cells else 1)
+        # 含“分标编号”列的行优先，避免匹配到只有名称、没有编号的技术详评细则表
+        if any("分标编号" in str(key) for key in row):
+            score += 4
         if score > best_score:
             best = row
             best_score = score
@@ -662,6 +703,22 @@ def _row_fields(row: dict[str, str]) -> dict[str, str]:
                     fields[key] = clean
                     break
     return fields
+
+
+def _apply_subproject_row(package: dict, row: dict[str, str]) -> None:
+    """清单/公告行的分标名称与分标目录一致时，强制校正分标名称与编号。"""
+    fields = _row_fields(row)
+    row_name = str(fields.get("subproject_name") or "").strip()
+    dir_name = str(package.get("subproject_dir") or "").strip()
+    if not row_name or not dir_name:
+        return
+    if row_name != dir_name and dir_name not in row_name and row_name not in dir_name:
+        return
+    for key in ("subproject_name", "subproject_number"):
+        value = str(fields.get(key) or "").strip()
+        if value:
+            package[key] = value
+            package[META_CHINESE[key]] = value
 
 
 def _is_placeholder(value: str) -> bool:
@@ -701,7 +758,60 @@ def _infer_subproject_dir(package: dict, list_paths: list[Path]) -> str:
 
 
 def _top_level_subproject_dir(archive_path: Path, roots: tuple[Path, ...]) -> str:
-    """取上传根目录下第一层目录作为分标目录名。"""
+    """兼容旧调用：单包推断分标目录。"""
+    return _detect_subproject_dirs([archive_path], roots).get(archive_path, archive_path.parent.name)
+
+
+_PACKAGE_COMPONENT_RE = re.compile(r"^包\s*\d+")
+
+
+def _is_package_component(name: str) -> bool:
+    """判断目录是否属于「包X_完整招标文件/技术规范书」层级。"""
+    return bool(_PACKAGE_COMPONENT_RE.match(name)) or "完整招标文件" in name or "技术规范书" in name
+
+
+def _detect_subproject_dirs(archives: list[Path], roots: tuple[Path, ...]) -> dict[Path, str]:
+    """按压缩包的实际目录层级推断分标目录，兼容任意嵌套深度。
+
+    步骤：
+    1. 取包相对上传根的目录链，去掉末尾「包X_…」层级；
+    2. 所有包共享的目录前缀视为招标包外层目录（可能多层），剥离；
+    3. 剩余目录链第一层即分标目录；若剥完为空，退回剥离前最后一层。
+    """
+    chains: dict[Path, tuple[str, ...]] = {}
+    for archive in archives:
+        relative = None
+        for root in roots:
+            try:
+                relative = Path(archive).relative_to(root)
+                break
+            except ValueError:
+                continue
+        parts = list(relative.parts[:-1]) if relative is not None else [Path(archive).parent.name]
+        while parts and _is_package_component(parts[-1]):
+            parts.pop()
+        chains[Path(archive)] = tuple(parts)
+
+    all_chains = [list(chain) for chain in chains.values()]
+    common: list[str] = []
+    if all_chains:
+        for index in range(min(len(chain) for chain in all_chains)):
+            value = all_chains[0][index]
+            if all(chain[index] == value for chain in all_chains):
+                common.append(value)
+            else:
+                break
+
+    result: dict[Path, str] = {}
+    for archive, chain in chains.items():
+        rest = list(chain[len(common):])
+        if rest:
+            result[archive] = rest[0]
+        elif chain:
+            result[archive] = chain[-1]
+        else:
+            result[archive] = Path(archive).parent.name
+    return result
     for root in roots:
         try:
             parts = archive_path.relative_to(root).parts

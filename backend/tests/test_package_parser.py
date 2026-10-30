@@ -183,3 +183,24 @@ def test_parenthesized_code_extracted_from_spec_filename(tmp_path):
     result = package_parser.parse_package_archive(package_dir, tmp_path)
     assert result["tech_spec_code"] == "B005-500134830-00019"
     assert "22729042998753854" not in result["tech_spec_codes"]
+
+
+def test_detect_subproject_dirs_ignores_wrapper_and_package_levels(tmp_path):
+    root = tmp_path / "input"
+    wrapper = root / "国网重庆市电力公司2026年第四次物资公开招"
+    archives = []
+    for name, code in (("网络特征分析平台", "22729043580804796"), ("网络特征分析平台-全流量威胁分析", "22729030231448349")):
+        archive = wrapper / name / f"包1_完整招标文件_{code}.zip"
+        archive.parent.mkdir(parents=True, exist_ok=True)
+        archive.write_bytes(b"PK")
+        archives.append(archive)
+        nested = archive.parent / f"包1_完整招标文件_{code}" / f"包1_技术规范书_{code}"
+        nested.mkdir(parents=True, exist_ok=True)
+        archives.append(nested)
+
+    mapping = package_parser._detect_subproject_dirs(archives, (root,))
+
+    assert mapping[archives[0]] == "网络特征分析平台"
+    assert mapping[archives[1]] == "网络特征分析平台"
+    assert mapping[archives[2]] == "网络特征分析平台-全流量威胁分析"
+    assert mapping[archives[3]] == "网络特征分析平台-全流量威胁分析"
