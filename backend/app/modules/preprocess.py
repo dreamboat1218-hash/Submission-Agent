@@ -184,22 +184,30 @@ def _decode_zip_name(name: str) -> str:
         return name
 
 
-MAX_PATH_BYTES = 900
-MAX_COMPONENT_BYTES = 180
+_IS_WINDOWS = os.name == "nt"
+# Windows 默认 MAX_PATH=260 字符，留出余量；POSIX 用 UTF-8 字节衡量
+MAX_PATH_MEASURE = 220 if _IS_WINDOWS else 900
+MAX_COMPONENT_MEASURE = 100 if _IS_WINDOWS else 180
+
+
+def _measure(text: str) -> int:
+    return len(text) if _IS_WINDOWS else len(text.encode("utf-8"))
 
 
 def _shorten_name(name: str, budget: int) -> str:
     """按 UTF-8 字节预算截断路径段，保留可读前缀 + 短哈希避免重名。"""
-    raw = name.encode("utf-8")
-    if len(raw) <= budget:
+    if _measure(name) <= budget:
         return name
     stem, dot, ext = name.rpartition(".")
     if not dot:
         stem, ext = name, ""
-    digest = hashlib.sha1(raw).hexdigest()[:8]
+    digest = hashlib.sha1(name.encode("utf-8")).hexdigest()[:8]
     suffix = f"_{digest}" + (f".{ext}" if ext else "")
-    keep = max(budget - len(suffix.encode("utf-8")), 16)
-    prefix = stem.encode("utf-8")[:keep].decode("utf-8", errors="ignore").rstrip()
+    keep = max(budget - _measure(suffix), 16)
+    if _IS_WINDOWS:
+        prefix = stem[:keep].rstrip()
+    else:
+        prefix = stem.encode("utf-8")[:keep].decode("utf-8", errors="ignore").rstrip()
     return f"{prefix or 'file'}{suffix}"
 
 
@@ -208,9 +216,9 @@ def _safe_target(dest: Path, name: str) -> Path:
     parts = [part for part in PurePosixPath(name.replace("\\", "/")).parts if part not in ("", ".")]
     if not parts:
         return dest_root
-    parts = [_shorten_name(part, MAX_COMPONENT_BYTES) for part in parts]
+    parts = [_shorten_name(part, MAX_COMPONENT_MEASURE) for part in parts]
     candidate = dest_root.joinpath(*parts)
-    if len(str(candidate).encode("utf-8")) > MAX_PATH_BYTES:
+    if _measure(str(candidate)) > MAX_PATH_MEASURE:
         parts = [_shorten_name(part, 40) for part in parts[:-1]] + [_shorten_name(parts[-1], 90)]
         candidate = dest_root.joinpath(*parts)
     target = candidate.resolve()
@@ -477,54 +485,150 @@ def _convert_docx(source: Path, md_path: Path) -> int:
     return 0
 
 
-def _convert_doc_legacy(source: Path, md_path: Path) -> int:
-    """旧版二进制 Word（.doc / 伪装成 .docx）通过 textutil 或 antiword 转换。
-
-    macOS 的 textutil 在超长中文路径下会误报"文件不存在"且仍返回 0，
-    因此先复制到短临时路径再转换，并校验输出文件是否真的生成。
-    """
+def _find_soffice() -> str:
     import shutil
+
+    for name in ("soffice", "libreoffice"):
+        found = shutil.which(name)
+        if found:
+            return found
+    candidates = (
+        Path("/Applications/LibreOffice.app/Contents/MacOS/soffice"),
+        Path(r"C:\Program Files\LibreOffice\program\soffice.exe"),
+        Path(r"C:\Program Files (x86)\LibreOffice\program\soffice.exe"),
+    )
+    for candidate in candidates:
+        if candidate.exists():
+            return str(candidate)
+    return ""
+
+
+def _decode_doc_text(data: bytes) -> str:
+    for encoding in ("utf-8-sig", "utf-16", "gbk"):
+        try:
+            return data.decode(encoding)
+        except UnicodeDecodeError:
+            continue
+    return data.decode("utf-8", errors="replace")
+
+
+def _convert_doc_with_libreoffice(source: Path, tmp_dir: Path) -> Path | None:
+    """用 LibreOffice 把 .doc 转 txt（Windows 办公机常见已安装）。"""
+    import subprocess
+
+    soffice = _find_soffice()
+    if not soffice:
+        return None
+    try:
+        subprocess.run(
+            [soffice, "--headless", "--convert-to", "txt:Text (encoded):UTF8", "--outdir", str(tmp_dir), str(source)],
+            capture_output=True,
+            text=True,
+            timeout=180,
+        )
+    except (OSError, subprocess.TimeoutExpired):
+        return None
+    output = tmp_dir / f"{source.stem}.txt"
+    return output if output.exists() else None
+
+
+def _convert_doc_with_word(source: Path, output: Path) -> bool:
+    """Windows 上用 Microsoft Word COM 转 txt；未安装 Word 时返回 False。"""
+    import subprocess
+
+    if not _IS_WINDOWS:
+        return False
+    powershell = shutil.which("powershell") or shutil.which("pwsh")
+    if not powershell:
+        return False
+
+    def quote(path: Path) -> str:
+        return str(path).replace("'", "''")
+
+    script = (
+        "$ErrorActionPreference='Stop';"
+        "$word=New-Object -ComObject Word.Application;"
+        "$word.Visible=$false;"
+        f"$doc=$word.Documents.Open('{quote(source)}',$false,$true);"
+        f"$doc.SaveAs([ref]'{quote(output)}',[ref]2);"
+        "$doc.Close($false);"
+        "$word.Quit();"
+    )
+    try:
+        result = subprocess.run(
+            [powershell, "-NoProfile", "-NonInteractive", "-Command", script],
+            capture_output=True,
+            text=True,
+            timeout=180,
+        )
+    except (OSError, subprocess.TimeoutExpired):
+        return False
+    return result.returncode == 0 and output.exists()
+
+
+def _convert_doc_legacy(source: Path, md_path: Path) -> int:
+    """旧版二进制 Word（.doc / 伪装成 .docx）转 Markdown。
+
+    依次尝试 LibreOffice → Microsoft Word COM（Windows）→ textutil（macOS）→ antiword，
+    并先复制到短临时路径，规避长中文路径与 textutil 误报。
+    """
     import subprocess
     import tempfile
 
-    textutil = shutil.which("textutil")
-    antiword = shutil.which("antiword")
-    if not textutil and not antiword:
-        raise RuntimeError("未找到 textutil/antiword，无法解析旧版 Word 文档")
-
+    errors: list[str] = []
     with tempfile.TemporaryDirectory(prefix="bid_doc_") as tmp:
         tmp_dir = Path(tmp)
         safe_source = tmp_dir / f"source{source.suffix.lower() or '.doc'}"
         shutil.copy2(source, safe_source)
 
+        converted = _convert_doc_with_libreoffice(safe_source, tmp_dir)
+        if converted is not None:
+            md_path.write_text(
+                f"# {source.name}\n\n{_decode_doc_text(converted.read_bytes())}",
+                encoding="utf-8",
+            )
+            logger.info("使用 LibreOffice 解析 %s", source.name)
+            return 0
+        errors.append("LibreOffice 不可用或转换失败")
+
+        word_output = tmp_dir / "output.txt"
+        if _convert_doc_with_word(safe_source, word_output):
+            md_path.write_text(
+                f"# {source.name}\n\n{_decode_doc_text(word_output.read_bytes())}",
+                encoding="utf-8",
+            )
+            logger.info("使用 Microsoft Word 解析 %s", source.name)
+            return 0
+        errors.append("未检测到 Microsoft Word")
+
+        textutil = shutil.which("textutil")
         if textutil:
-            txt_path = tmp_dir / "output.txt"
+            textutil_output = tmp_dir / "textutil.txt"
             result = subprocess.run(
-                [textutil, "-convert", "txt", str(safe_source), "-output", str(txt_path)],
+                [textutil, "-convert", "txt", str(safe_source), "-output", str(textutil_output)],
                 capture_output=True,
                 text=True,
                 timeout=60,
             )
-            if result.returncode != 0 or not txt_path.exists():
-                detail = (result.stderr or result.stdout or "").strip()[-300:] or "未生成输出文件"
-                raise RuntimeError(f"textutil 转换失败：{detail}")
-            data = txt_path.read_bytes()
-            for encoding in ("utf-8-sig", "utf-16", "gbk"):
-                try:
-                    text = data.decode(encoding)
-                    break
-                except UnicodeDecodeError:
-                    continue
-            else:
-                text = data.decode("utf-8", errors="replace")
-            md_path.write_text(f"# {source.name}\n\n{text}", encoding="utf-8")
-            return 0
+            if result.returncode == 0 and textutil_output.exists():
+                md_path.write_text(
+                    f"# {source.name}\n\n{_decode_doc_text(textutil_output.read_bytes())}",
+                    encoding="utf-8",
+                )
+                logger.info("使用 textutil 解析 %s", source.name)
+                return 0
+            errors.append("textutil 转换失败")
 
-        result = subprocess.run([antiword, str(safe_source)], capture_output=True, text=True, timeout=60)
-        if result.returncode != 0:
-            raise RuntimeError(f"antiword 转换失败：{result.stderr[-300:]}")
-        md_path.write_text(f"# {source.name}\n\n{result.stdout}", encoding="utf-8")
-        return 0
+        antiword = shutil.which("antiword")
+        if antiword:
+            result = subprocess.run([antiword, str(safe_source)], capture_output=True, text=True, timeout=60)
+            if result.returncode == 0 and result.stdout.strip():
+                md_path.write_text(f"# {source.name}\n\n{result.stdout}", encoding="utf-8")
+                logger.info("使用 antiword 解析 %s", source.name)
+                return 0
+            errors.append("antiword 转换失败")
+
+    raise RuntimeError("旧版 Word 解析失败：" + "；".join(errors))
 
 
 def _table_to_markdown(table) -> str:
